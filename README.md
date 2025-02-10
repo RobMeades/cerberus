@@ -1,6 +1,10 @@
 # Introduction
 All of the files related to messing about with a voice assistant, based on gerganov's marvellous [whisper.cpp](https://github.com/ggerganov/whisper.cpp/tree/master), running on an 8 gigabyte Raspberry Pi 5 equipped with a [Codec Zero](https://thepihut.com/products/iqaudio-codec-zero) audio board.
 
+After getting quite a long way with this (using [whisper.cpp](https://github.com/ggerganov/whisper.cpp) for voice input, [Piper TTS](https://github.com/rhasspy/piper) for voice output, and incorporating a heavily quantized version of DeepSeek as the LLM), it became clear that, fun though a local LLM is, it is always going to be poor in reliability-of-response terms versus the cloud and the key thing one wants from a voice assistant is integrations with other things.  It turns out that [Home Assistant](https://www.home-assistant.io/), designed to be run on a Pi, uses [whisper.cpp](https://github.com/ggerganov/whisper.cpp) and [Piper TTS](https://github.com/rhasspy/piper) for its [voice interface](https://www.home-assistant.io/voice_control/voice_remote_local_assistant/#some-options-for-speech-to-text-and-text-to-speech) and, of course, [Home Assistant](https://www.home-assistant.io/) is designed with integrations in mind.
+
+The down-side of [Home Assistant](https://www.home-assistant.io/) is that it is an OS, not an application, it needs to own the entire machine.  So I put the SD card with all of the stuff below to one side and tried the [Home Assistant](https://www.home-assistant.io/) route instead.
+
 # Installation
 ## Pi Basics
 Use the [Raspberry PI Imager](https://www.raspberrypi.com/news/raspberry-pi-imager-imaging-utility/) to write the headless Raspbian distribution for a Pi 5 to SD card (with SSH access enabled and your Wifi details pre-entered for ease of first use).  Insert the SD card into the Pi 5, plug the audio board onto the Pi 5 header, wire a small speaker to the speaker output terminals of the audio board (good enough for testing) and power up the Pi.
@@ -164,10 +168,12 @@ You will also need `ffmpeg` to convert `.wav` files into 16-bit format (which is
 ```
 git clone git://source.ffmpeg.org/ffmpeg --depth=1
 cd ffmpeg
-./configure --extra-ldflags="-latomic" --arch=arm64 --target-os=linux
+./configure --extra-ldflags="-latomic" --arch=arm64 --target-os=linux --enable-ffplay
 make -j4
 sudo make install
 ```
+
+Note: `--enable-ffplay` to give the option of using the `ElevenLabs` text to speech system, which uses `ffplay`.
 
 With that done, clone the [whisper.cpp](https://github.com/ggerganov/whisper.cpp) repo to the Pi:
 
@@ -269,10 +275,16 @@ Since running with Bartowski's [Llama-3.2-1B-Instruct-f16.gguf](https://huggingf
 
 I wanted to try the ARM optimised version of the same thing, [Meta-Llama-3.1-8B-Instruct-Q4_0_4_4.gguf](https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_0_4_4.gguf), but that failed to load with the error "`gguf_init_from_file_impl: tensor 'blk.0.attn_k.weight' of type 31 (TYPE_Q4_0_4_4 REMOVED, use Q4_0 with runtime repacking) has 4096 elements per row, not a multiple of block size (0)`", a problem being discussed [here](https://github.com/ggerganov/llama.cpp/issues/10757) I think.
 
-I also wanted to try Bartowski's ARM-optimized version of [DeepSeek-R1-Distill-Qwen-7B-IQ4_NL.gguf](https://huggingface.co/bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF/resolve/main/DeepSeek-R1-Distill-Qwen-7B-IQ4_NL.gguf) but that suffers from a different loading error "`llama_model_load: error loading model: error loading model vocabulary: unknown pre-tokenizer type: 'deepseek-r1-qwen'`", being discussed [here](https://github.com/oobabooga/text-generation-webui/issues/6679).
-
-All quite bleeding-edge then; I'll leave it a little while to settle.
+I _did_ however manage to run Bartowski's ARM-optimized version of [DeepSeek-R1-Distill-Qwen-7B-IQ4_NL.gguf](https://huggingface.co/bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF/resolve/main/DeepSeek-R1-Distill-Qwen-7B-IQ4_NL.gguf); that ran in just over 7 gigabytes of memory and was as responsive as [Llama-3.2-1B-Instruct-f16.gguf](https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-f16.gguf), which was rather good.  This one knew that the Atlantic ocean prevents a drive from London to New York, and knew that New York is 5 hours behind London but, when asked the current time in London or in New York (likely anywhere), it would always give the same answer: the time the program was executed.
 
 ## Other Speech Models
 Given that I couldn't get far with other LLMs, I thought I'd try some different speech models to see what difference they might make to transcription accuracy.  I downloaded the top-end one, [ggml-large-v3-turbo-q8_0.bin](https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q8_0.bin), but it really didn't seem very turbo, taking more than 20 seconds to process any command.  I went back to `base` and tried the non-quantized version [ggml-base.bin](https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin), which was very slightly slower (2ish rather than 1.7ish seconds) and not significantly better.  All of which made me try [ggml-tiny.en-q8_0.bin](https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en-q8_0.bin), and that seemed pretty good actually, with a response time approaching a second.  It is possible, of course, that the quality of the microphone, my position relative to it, etc. introduces more variation in quality than the speech model; the cost in latency with the larger models is what I'm tending to notice most.
 
+# Zeroth Implementation
+After all of the above, I explored the existing command-line options of the `talk-llama` example and found that it already supports a "wake" command and can be told to emit a phrase when it has heard what has been said, compensating somewhat for the fact that the entire output has to land in a file before it is piped to the text-to-speech system.  Here is a kind of no effort Cerberus implementation using all of that with the ARM-optimised DeepSeek distillation:
+
+```
+./build/bin/whisper-talk-llama -mw ./models/ggml-base.en-q8_0.bin -ac 768 -ml ./models/DeepSeek-R1-Distill-Qwen-7B-IQ4_NL.gguf -p "Rob" -bn "Cerberus" --heard-ok "Thinking..." --wake-command "Hey Cerberus" -t 8
+```
+
+Note: I tried using a session file but it didn't seem to work correctly, it would cause the model to start answering questions from the previous session spontaneously for no good reason.
